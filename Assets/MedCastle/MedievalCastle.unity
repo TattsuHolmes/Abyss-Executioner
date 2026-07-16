@@ -122631,9 +122631,17 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 9e4992fcb06cc2a47bde3aa694a83e2e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: '::'
-  moveSpeed: 6
+  walkSpeed: 3
+  sprintSpeed: 7
   rotationSpeed: 10
-  attackCooldown: 1
+  maxStamina: 100
+  staminaDrainRate: 25
+  staminaRegenRate: 15
+  currentStamina: 0
+  comboWindow: 1.5
+  attack3DashSpeed: 8
+  attack3DashStartTime: 0.5
+  attack3DashEndTime: 0.6
 --- !u!143 &1508680912
 CharacterController:
   m_ObjectHideFlags: 0

@@ -4,18 +4,33 @@ using UnityEngine;
 public class PlayerMovement : MonoBehaviour
 {
     [Header("移動の速さ")]
-    public float walkSpeed = 3.0f;     // 歩く速さ
-    public float sprintSpeed = 7.0f;   // ダッシュの速さ（スタミナ消費時）
-    public float rotationSpeed = 10.0f;// 振り向く速さ
+    public float walkSpeed = 3.0f;
+    public float sprintSpeed = 7.0f;
+    public float rotationSpeed = 10.0f;
 
     [Header("スタミナ設定")]
-    public float maxStamina = 100f;      // スタミナの最大値
-    public float staminaDrainRate = 25f; // 1秒間に減るスタミナ量（4秒で空になる計算）
-    public float staminaRegenRate = 15f; // 1秒間に回復するスタミナ量
-    public float currentStamina;         // 現在のスタミナ
+    public float maxStamina = 100f;
+    public float staminaDrainRate = 25f;
+    public float staminaRegenRate = 15f;
+    public float currentStamina;
 
     [Header("攻撃の設定")]
-    public float attackCooldown = 1.0f;
+    public float comboWindow = 1.5f;
+
+    // ★大進化：一時停止（タメ）の機能を追加！
+    [Header("3段目の溜め＆踏み込み設定")]
+    public float attack3ChargeDuration = 0.5f;     // 何秒間「溜める（一時停止する）」か（現実の秒数）
+    public float attack3ChargeAnimTime = 0.2f;     // アニメのどのタイミングで止めるか（0.0〜1.0：剣を振りかぶった時がおすすめ）
+    public float attack3DashSpeed = 12.0f;         // 溜め解放後の、前に踏み込むスピード
+    public float attack3DashEndTime = 0.6f;        // 踏み込みが終わるアニメのタイミング（0.0〜1.0）
+
+    private float lastAttackTime;
+    private int comboStep = 0;
+
+    // 溜めの裏側で使うタイマーとフラグ
+    private bool isCharging = false;
+    private bool hasChargedThisAttack = false;
+    private float chargeTimer = 0f;
 
     private CharacterController controller;
     private Animator animator;
@@ -24,8 +39,6 @@ public class PlayerMovement : MonoBehaviour
     void Start()
     {
         controller = GetComponent<CharacterController>();
-
-        // 前回先生と直した完璧なコード！
         animator = GetComponentInChildren<Animator>();
 
         if (Camera.main != null)
@@ -33,8 +46,7 @@ public class PlayerMovement : MonoBehaviour
             cameraTransform = Camera.main.transform;
         }
 
-        currentStamina = maxStamina; // ゲーム開始時はスタミナ満タン
-
+        currentStamina = maxStamina;
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
     }
@@ -49,14 +61,64 @@ public class PlayerMovement : MonoBehaviour
     {
         AnimatorStateInfo stateInfo = animator.GetCurrentAnimatorStateInfo(0);
 
-        // 攻撃の最中は足を止める！
-        if (stateInfo.IsName("Attack1") || stateInfo.IsName("Attack2"))
+        // 攻撃中の処理
+        if (stateInfo.IsName("Attack1") || stateInfo.IsName("Attack2") || stateInfo.IsName("Attack3"))
         {
             animator.SetFloat("Speed", 0f);
+
+            // --- 3段目の「タメ ➔ 踏み込み」スペシャル処理 ---
+            if (stateInfo.IsName("Attack3"))
+            {
+                float playTime = stateInfo.normalizedTime;
+
+                // ① タメるタイミングに到達し、まだタメていない場合
+                if (playTime >= attack3ChargeAnimTime && !hasChargedThisAttack)
+                {
+                    isCharging = true;
+                    // ★ここでアニメーションを超スロー（ほぼ一時停止）にする！
+                    animator.speed = 0.05f;
+
+                    // タイマーを進める
+                    chargeTimer += Time.deltaTime;
+
+                    // 指定した時間（例: 0.5秒）タメたら解放！
+                    if (chargeTimer >= attack3ChargeDuration)
+                    {
+                        isCharging = false;
+                        hasChargedThisAttack = true;
+                        animator.speed = 1.0f; // ★アニメーションの速度を元に戻す
+                    }
+
+                    // タメている最中は動かさずにここで処理終了
+                    controller.Move(Vector3.down * 9.8f * Time.deltaTime);
+                    return;
+                }
+
+                // ② タメが完了した瞬間から、一気に踏み込む！
+                if (hasChargedThisAttack && playTime <= attack3DashEndTime)
+                {
+                    Vector3 dashMove = transform.forward * attack3DashSpeed * Time.deltaTime;
+                    controller.Move(dashMove + Vector3.down * 9.8f * Time.deltaTime);
+                    return;
+                }
+            }
+            else
+            {
+                // 1段目・2段目の時はバグらないようにタメ状態をリセットしておく
+                ResetChargeState();
+            }
+
+            // 足を止める（1、2段目や、3段目の踏み込みが終わった後）
             controller.Move(Vector3.down * 9.8f * Time.deltaTime);
             return;
         }
+        else
+        {
+            // 攻撃が終わって待機や移動に戻った時も、念のため確実にリセットする
+            ResetChargeState();
+        }
 
+        // --- いつもの移動処理 ---
         float h = Input.GetAxisRaw("Horizontal");
         float v = Input.GetAxisRaw("Vertical");
         Vector3 inputDir = new Vector3(h, 0f, v).normalized;
@@ -64,22 +126,19 @@ public class PlayerMovement : MonoBehaviour
         float speedParam = 0f;
         float currentSpeed = walkSpeed;
 
-        // 入力がある（移動しようとしている）場合
         if (inputDir.magnitude >= 0.1f)
         {
-            // Shiftキーを押していて、かつスタミナが残っているならダッシュ！
             if (Input.GetKey(KeyCode.LeftShift) && currentStamina > 0)
             {
                 currentSpeed = sprintSpeed;
-                speedParam = 1.0f; // アニメーターには 1.0 (ダッシュ) を送る
-                currentStamina -= staminaDrainRate * Time.deltaTime; // スタミナを減らす
+                speedParam = 1.0f;
+                currentStamina -= staminaDrainRate * Time.deltaTime;
             }
             else
             {
                 currentSpeed = walkSpeed;
-                speedParam = 0.5f; // アニメーターには 0.5 (歩き) を送る
+                speedParam = 0.5f;
 
-                // ダッシュしていないならスタミナを回復する
                 if (currentStamina < maxStamina)
                 {
                     currentStamina += staminaRegenRate * Time.deltaTime;
@@ -95,34 +154,53 @@ public class PlayerMovement : MonoBehaviour
         }
         else
         {
-            // 立ち止まっている時もスタミナを回復する
             if (currentStamina < maxStamina)
             {
                 currentStamina += staminaRegenRate * Time.deltaTime;
             }
         }
 
-        // スタミナが0以下になったり、最大値を超えたりしないように制限
         currentStamina = Mathf.Clamp(currentStamina, 0, maxStamina);
-
         animator.SetFloat("Speed", speedParam);
         controller.Move(Vector3.down * 9.8f * Time.deltaTime);
     }
 
     void HandleAttack()
     {
+        if (Time.time - lastAttackTime > comboWindow)
+        {
+            comboStep = 0;
+        }
+
         if (Input.GetMouseButtonDown(0))
         {
-            AnimatorStateInfo stateInfo = animator.GetCurrentAnimatorStateInfo(0);
-
-            if (!stateInfo.IsName("Attack1") && !stateInfo.IsName("Attack2"))
+            if (comboStep == 0)
             {
                 animator.SetTrigger("Attack");
+                lastAttackTime = Time.time;
+                comboStep = 1;
             }
-            else if (stateInfo.IsName("Attack1"))
+            else if (comboStep == 1)
             {
                 animator.SetTrigger("Attack");
+                lastAttackTime = Time.time;
+                comboStep = 2;
+            }
+            else if (comboStep == 2)
+            {
+                animator.SetTrigger("Attack");
+                lastAttackTime = Time.time;
+                comboStep = 0;
             }
         }
+    }
+
+    // ★追加：アニメーションの速度やタメの状態を初期化する便利関数
+    void ResetChargeState()
+    {
+        isCharging = false;
+        hasChargedThisAttack = false;
+        chargeTimer = 0f;
+        animator.speed = 1.0f; // アニメーション速度を必ず元(等速)に戻す！
     }
 }
